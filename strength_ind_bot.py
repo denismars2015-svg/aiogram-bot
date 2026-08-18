@@ -519,6 +519,13 @@ def get_weight_keyboard(category, user_id, database): # Вывод кнопок 
     builder.adjust(1)
     return builder.as_markup()
 
+def get_name_of_exercise_by_index(exercises_list, prefix="ex_idx_"):
+    builder = InlineKeyboardBuilder()
+    for index, ex_name in enumerate(exercises_list):
+        builder.add(InlineKeyboardButton(text=ex_name, callback_data=f"{prefix}{index}"))
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_reps_keyboard(category, user_id, database): # Вывод кнопок для выбора количества повторов
     builder = InlineKeyboardBuilder()
     user_data = database.get(str(user_id), {})
@@ -615,10 +622,18 @@ async def categ_callback(callback: types.CallbackQuery, state: FSMContext ):
     category_name = callback.data.replace("categ_", "")
     await state.update_data(chosen_category=category_name)
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
-           
         database = json.load(f)  
     user_id = callback.from_user.id
-    await callback.message.answer( text=f"Оберіть вправу з категорії '{category_name}':", reply_markup=get_name_of_exersice(category_name, user_id, database))
+    
+    # 1. Дістаємо список вправ та зберігаємо в стан
+    exercises_list = database.get(str(user_id), {}).get('exercise', {}).get(category_name, [])
+    await state.update_data(current_exercises=exercises_list)
+    
+    # 2. Викликаємо функцію генерації кнопок за індексом
+    await callback.message.answer(
+        text=f"Оберіть вправу з категорії '{category_name}':", 
+        reply_markup=get_name_of_exercise_by_index(exercises_list)
+    )
 
 
     
@@ -631,6 +646,25 @@ async def ex_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(old_name=ex_name)# Запоминаем в память старое название
 
     await callback.message.answer(f"Ви обрали вправу '{ex_name}'. Що бажаєте зробити?", reply_markup=get_variants_of_exercise_keyboard())   
+
+@router.callback_query(F.data.startswith("ex_idx_"))
+async def ex_index_callback(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    
+    index = int(callback.data.replace("ex_idx_", ""))
+    user_data = await state.get_data()
+    exercises_list = user_data.get("current_exercises", [])
+    
+    if index < len(exercises_list):
+        ex_name = exercises_list[index]
+        await state.update_data(old_name=ex_name)
+        
+        await callback.message.answer(
+            f"Ви обрали вправу '{ex_name}'. Що бажаєте зробити?", 
+            reply_markup=get_variants_of_exercise_keyboard()
+        )
+    else:
+        await callback.message.answer("Помилка: вправу не знайдено.")
 @router.callback_query(F.data == "edit_ex")
 async def edit_ex_callback(callback: types.CallbackQuery,  state: FSMContext):
       
@@ -860,8 +894,41 @@ async def train_categ_callback(callback: types.CallbackQuery, state: FSMContext)
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
         database = json.load(f)  
     user_id = callback.from_user.id
-    await callback.message.answer(text=f"Оберіть вправу з категорії {category_name} для додавання до тренування:", reply_markup=get_exercise_for_training_keyboard(category_name, user_id, database))
+    
+    # 1. Дістаємо список вправ та зберігаємо в стан
+    exercises_list = database.get(str(user_id), {}).get('exercise', {}).get(category_name, [])
+    await state.update_data(current_exercises=exercises_list)
+    
+    # 2. Викликаємо генерацію кнопок за індексом з іншим префіксом для тренувань
+    await callback.message.answer(
+        text=f"Оберіть вправу з категорії {category_name} для додавання до тренування:", 
+        reply_markup=get_name_of_exercise_by_index(exercises_list, prefix="train_idx_")
+    )
 
+@router.callback_query(F.data.startswith("train_idx_"))
+async def train_index_callback(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    
+    index = int(callback.data.replace("train_idx_", ""))
+    user_data = await state.get_data()
+    exercises_list = user_data.get("current_exercises", [])
+    
+    if index < len(exercises_list):
+        ex_name = exercises_list[index]
+        await state.update_data(chosen_exercise=ex_name)
+        
+        user_data = await state.get_data()
+        chosen_date = user_data.get("chosen_date")
+        chosen_category = user_data.get("chosen_category")
+        real_user_id = callback.from_user.id
+
+        add_user_exercise_to_training(real_user_id, chosen_date, chosen_category, ex_name)
+
+        await callback.message.answer(f"Вправу '{ex_name}' додано до тренування на дату '{chosen_date}' у категорії '{chosen_category}'.")
+        await callback.message.answer("Введіть вагу для цієї вправи:")
+        await state.set_state(AddExerciseState.waiting_for_weight)
+    else:
+        await callback.message.answer("Помилка: вправу не знайдено.")
 
 @router.callback_query(F.data.startswith("trainex_"))
 async def trainex_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -982,41 +1049,50 @@ async def edit_training_callback(callback: types.CallbackQuery, state: FSMContex
 @router.callback_query(F.data.startswith("edit_tr_date_"))
 async def show_date_for_edit_tr(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-
-    # И ЗДЕСЬ МЕНЯЕМ НА "edit_tr_date_"
     date_name = callback.data.replace("edit_tr_date_", "")
-    
     await state.update_data(chosen_edit_date=date_name)
 
-    # Відкриваємо базу
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
         database = json.load(f)
         
-    # Виводимо всі вправи суцільним списком кнопок
-    keyboard = get_all_training_exercises_keyboard(date_name, callback.from_user.id, database)
+    user_id = str(callback.from_user.id)
+    training_data = database.get(user_id, {}).get('training', {}).get(date_name, {})
     
-    await callback.message.edit_text( text=f"Оберіть вправу для редагування у тренуванні за {date_name}:", reply_markup=keyboard )
+    # Збираємо всі вправи за обрану дату в один список
+    flat_exercises = []
+    for category, exercises in training_data.items():
+        for ex in exercises.keys():
+            flat_exercises.append(ex)
+            
+    await state.update_data(current_exercises=flat_exercises)
     
+    await callback.message.edit_text(
+        text=f"Оберіть вправу для редагування у тренуванні за {date_name}:", 
+        reply_markup=get_name_of_exercise_by_index(flat_exercises, prefix="edit_tr_idx_")
+    )
     
-
-@router.callback_query(F.data.startswith("edit_tr_ex_"))
+@router.callback_query(F.data.startswith("edit_tr_idx_"))
 async def process_exercise_edit_selection(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     
-    # 1. Достаем чистое название упражнения
-    ex_name = callback.data.replace("edit_tr_ex_", "")
+    # Дістаємо індекс та назву
+    index = int(callback.data.replace("edit_tr_idx_", ""))
+    user_data = await state.get_data()
+    flat_exercises = user_data.get("current_exercises", [])
     
-    # 2. Запоминаем выбранное упражнение в "оперативную память" бота
+    if index >= len(flat_exercises):
+        await callback.message.answer("Помилка: вправу не знайдено.")
+        return
+
+    ex_name = flat_exercises[index]
     await state.update_data(chosen_edit_ex=ex_name)
     
-    # 3. Вызываем клавиатуру, которую мы создали на Шаге 1
     new_keyboard = get_variants_of_inf_abt_ex_in_tr_keyboard(ex_name)
-    
-    # 4. Обновляем сообщение бота
     await callback.message.edit_text(
         text=f"Ви обрали вправу <b>{ex_name}</b>. Що бажаєте з нею зробити?",
         reply_markup=new_keyboard,
-        parse_mode="HTML")
+        parse_mode="HTML"
+    )
 
 @router.callback_query(F.data =="edit_weight")
 async def edit_weight_callback(callback : types.CallbackQuery , state : FSMContext):
@@ -1106,38 +1182,56 @@ def get_del_training_exercises_keyboard(date_name, user_id, database):
 @router.callback_query(F.data.startswith("del_ex_tr_date_"))
 async def process_date_for_del_ex(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    
-    # Дістаємо дату і запам'ятовуємо її
     date_name = callback.data.replace("del_ex_tr_date_", "") 
     await state.update_data(del_ex_date=date_name) 
     
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
         database = json.load(f)
         
-    # Викликаємо нашу нову клавіатуру
-    keyboard = get_del_training_exercises_keyboard(date_name, callback.from_user.id, database)
+    user_id = str(callback.from_user.id)
+    training_data = database.get(user_id, {}).get('training', {}).get(date_name, {})
     
-    await callback.message.edit_text(text=f"Оберіть вправу, яку хочете видалити з тренування за {date_name}:", reply_markup=keyboard)
+    # Збираємо всі вправи за обрану дату в один список
+    flat_exercises = []
+    for category, exercises in training_data.items():
+        for ex in exercises.keys():
+            flat_exercises.append(ex)
+            
+    await state.update_data(current_exercises=flat_exercises)
+    
+    await callback.message.edit_text(
+        text=f"Оберіть вправу, яку хочете видалити з тренування за {date_name}:", 
+        reply_markup=get_name_of_exercise_by_index(flat_exercises, prefix="del_tr_idx_")
+    )
 
-# Крок 4: Ловимо обрану вправу і остаточно видаляємо її
-@router.callback_query(F.data.startswith("finish_del_ex_"))
+@router.callback_query(F.data.startswith("del_tr_idx_"))
 async def finish_del_ex_in_tr(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     
-    # Дістаємо назву вправи
-    ex_name = callback.data.replace("finish_del_ex_", "")
+    # Дістаємо індекс та назву
+    index = int(callback.data.replace("del_tr_idx_", ""))
+    user_data = await state.get_data()
+    flat_exercises = user_data.get("current_exercises", [])
+    
+    if index >= len(flat_exercises):
+        await callback.message.answer("Помилка: вправу не знайдено.")
+        return
+
+    ex_name = flat_exercises[index]
+    date_name = user_data.get("del_ex_date")
     user_id = callback.from_user.id
     
-    # Дістаємо збережену раніше дату
-    user_data = await state.get_data()
-    date_name = user_data.get("del_ex_date")
-    
-    # Викликаємо вашу функцію видалення
     delete_user_ex_in_tr(user_id, date_name, ex_name)
     
-    await callback.message.edit_text(text=f"Вправу <b>'{ex_name}'</b> успішно видалено з тренування за <b>{date_name}</b>!", parse_mode="HTML")
+    await callback.message.edit_text(
+        text=f"Вправу <b>'{ex_name}'</b> успішно видалено з тренування за <b>{date_name}</b>!", 
+        parse_mode="HTML"
+    )
     await state.clear()
     await callback.message.answer("Оберіть наступну дію:", reply_markup=get_main_keyboard())
+
+# Крок 4: Ловимо обрану вправу і остаточно видаляємо її
+
 
 @router.callback_query(F.data == "show_inf_of_ex")
 async def show_in_of_ex_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -1146,53 +1240,59 @@ async def show_in_of_ex_callback(callback: types.CallbackQuery, state: FSMContex
     await callback.message.answer(text="Оберіть группу м'язів",reply_markup=get_categories_stat_of_ex_keyboard())    #Выводит выбор группы мышц 
     
     
-@router.callback_query(F.data.startswith("inf_of_ex_categ_")) # метод проверки строки
-async def categ_for_inf_callback(callback: types.CallbackQuery, state: FSMContext ):
-        
+@router.callback_query(F.data.startswith("inf_of_ex_categ_"))
+async def categ_for_inf_callback(callback: types.CallbackQuery, state: FSMContext):
     category_name = callback.data.replace("inf_of_ex_categ_", "")
     await state.update_data(chosen_category=category_name)
+    
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
-               
         database = json.load(f)  
-        user_id = callback.from_user.id
-    await callback.message.answer( text=f"Оберіть вправу з категорії '{category_name}':", reply_markup=get_ex_stat_of_ex_keyboard(category_name, user_id, database))
+        
+    user_id = str(callback.from_user.id)
+    # Зберігаємо список у пам'ять
+    exercises_list = database.get(user_id, {}).get('exercise', {}).get(category_name, [])
+    await state.update_data(current_exercises=exercises_list)
+    
+    # Виводимо через індекси
+    await callback.message.answer(
+        text=f"Оберіть вправу з категорії '{category_name}':", 
+        reply_markup=get_name_of_exercise_by_index(exercises_list, prefix="stat_idx_")
+    )
 
-@router.callback_query(F.data.startswith("stat_of_ex_"))
+@router.callback_query(F.data.startswith("stat_idx_"))
 async def stat_ex_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
-    ex_name = callback.data.replace("stat_of_ex_", "")
-    user_id = str(callback.from_user.id)
+    # Дістаємо індекс та назву
+    index = int(callback.data.replace("stat_idx_", ""))
     user_data = await state.get_data()
+    exercises_list = user_data.get("current_exercises", [])
+    
+    if index >= len(exercises_list):
+        await callback.message.answer("Помилка: вправу не знайдено.")
+        return
+
+    ex_name = exercises_list[index]
     category_name = user_data.get("chosen_category")
+    user_id = str(callback.from_user.id)
 
     with open('strenght_inf.json', 'r', encoding='utf-8') as f:
         database = json.load(f)
 
-    # 1. Беремо історію тренувань
     training_history = database.get(user_id, {}).get("training", {})
-    
-    # 2. Формуємо красиве повідомлення
     msg_text = f"📊 <b>Статистика для вправи: {ex_name}</b>\n"
     found = False
 
-    # 3. Шукаємо цю вправу по всіх збережених датах
     for date_name, date_data in training_history.items():
-        # Якщо в цей день робили цю категорію і цю вправу:
         if category_name in date_data and ex_name in date_data[category_name]:
             found = True
             weights = date_data[category_name][ex_name]
-            
-            # Додаємо у повідомлення дату, вагу та повтори
             for weight, reps in weights.items():
-                msg_text += f"📅 <b>{date_name}</b>: \n "
-                msg_text += f" 💪 <b> {weight} кг </b>\n"
-                msg_text += f"🔢 <b>{reps} повт</b>\n"
-    # Якщо вправу жодного разу не робили на тренуваннях
+                msg_text += f"📅 <b>{date_name}</b>: \n  💪 <b> {weight} кг </b>\n🔢 <b>{reps} повт</b>\n"
+                
     if not found:
         msg_text += "<i>Ви ще не виконували цю вправу на жодному тренуванні.</i>"
 
-    # Виводимо статистику та повертаємо в меню
     await callback.message.edit_text(text=msg_text, parse_mode="HTML")
     await state.clear()
     await callback.message.answer("Оберіть наступну дію:", reply_markup=get_main_keyboard()) 
