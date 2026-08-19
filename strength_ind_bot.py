@@ -37,21 +37,11 @@ class EditWeightState(StatesGroup):
 class EditRepsState(StatesGroup):
     waiting_for_new_reps = State()
 
-def reps(database, rep_id, **kwargs):
-    database[rep_id] = kwargs
+from dotenv import load_dotenv
+load_dotenv()  # <--- Вызываем загрузку в самом начале!
 
-def weights(database, weight_id, **kwargs):
-    database[weight_id] = kwargs
-
-
-def workouts(database,date_id, **kwargs):
-      database[date_id] = kwargs 
-load_dotenv()
-
-def exercise(database, my_ex, **kwargs):
-    database[my_ex] = kwargs
-
-
+import os
+# ... остальные импорты ...
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -309,7 +299,7 @@ def show_date_of_training(date_name,user_id , database) : # Вывод кноп�
     for date_name in database[str(user_id)]['training_dates']:
         builder.add(InlineKeyboardButton (text=date_name , callback_data=f"date_{date_name}"))
 
-    builder.adjust(1) # Выврод конопок по одной в столбик
+    builder.adjust(2) # Выврод конопок по одной в столбик
 
     return builder.as_markup()
 
@@ -324,7 +314,7 @@ def show_exercise_of_training(date_name, user_id, database):
         for ex_name in exercises:
             builder.add(InlineKeyboardButton(text=f"{category}: {ex_name}", callback_data=f"showtrainex_{ex_name}"))
 
-    builder.adjust(1)  # Вывод кнопок по одной в столбик
+    builder.adjust(2)  # Вывод кнопок по одной в столбик
 
     return builder.as_markup()
 
@@ -436,15 +426,7 @@ def update_user_reps(user_id, date_name, ex_name, new_reps):
         
     return old_r_to_return
 
-def get_name_of_exersice (category , user_id , database) : # Вывод кнопок упржнений 
-    builder = InlineKeyboardBuilder()
-    
-    for ex_name in database[str(user_id)]['exercise'][category]:
-        builder.add(InlineKeyboardButton (text=ex_name , callback_data=f"ex_{ex_name}"))
 
-    builder.adjust(1) # Выврод конопок по одной в столбик
-
-    return builder.as_markup()
 
 def get_date_of_training (date_name,user_id , database) : # Вывод кнопок дат
     builder = InlineKeyboardBuilder()
@@ -452,7 +434,7 @@ def get_date_of_training (date_name,user_id , database) : # Вывод кноп�
     for date_name in database[str(user_id)]['training_dates']:
         builder.add(InlineKeyboardButton (text=date_name , callback_data=f"datetrain_{date_name}"))
 
-    builder.adjust(1) # Выврод конопок по одной в столбик
+    builder.adjust(2) # Выврод конопок по одной в столбик
 
     return builder.as_markup()
 
@@ -510,30 +492,16 @@ def show_date_of_training_for_user(prefix, user_id, database):
     return builder.as_markup()
 
 
-def get_weight_keyboard(category, user_id, database): # Вывод кнопок для выбора веса
-    builder = InlineKeyboardBuilder()
-    user_data = database.get(str(user_id), {})
-    user_weights = user_data.get('weights', [])
-    for weight in user_weights:
-        builder.add(InlineKeyboardButton(text=weight, callback_data=f"weight_{weight}"))
-    builder.adjust(1)
-    return builder.as_markup()
+
 
 def get_name_of_exercise_by_index(exercises_list, prefix="ex_idx_"):
     builder = InlineKeyboardBuilder()
     for index, ex_name in enumerate(exercises_list):
         builder.add(InlineKeyboardButton(text=ex_name, callback_data=f"{prefix}{index}"))
-    builder.adjust(1)
+    builder.adjust(2)
     return builder.as_markup()
 
-def get_reps_keyboard(category, user_id, database): # Вывод кнопок для выбора количества повторов
-    builder = InlineKeyboardBuilder()
-    user_data = database.get(str(user_id), {})
-    user_reps = user_data.get('reps', [])
-    for rep in user_reps:
-        builder.add(InlineKeyboardButton(text=rep, callback_data=f"rep_{rep}"))
-    builder.adjust(1)
-    return builder.as_markup()
+
 
 def get_exercise_for_training_keyboard(category, user_id, database): # Вывод кнопок упражнений для добавления к тренировке
     builder = InlineKeyboardBuilder()
@@ -545,7 +513,7 @@ def get_exercise_for_training_keyboard(category, user_id, database): # Выво�
     for ex_name in user_exercises:
         builder.add(InlineKeyboardButton(text=ex_name, callback_data=f"trainex_{ex_name}"))
 
-    builder.adjust(1) # Вывод кнопок по одной в столбик
+    builder.adjust(2) # Вывод кнопок по одной в столбик
 
     return builder.as_markup()
 
@@ -635,23 +603,13 @@ async def categ_callback(callback: types.CallbackQuery, state: FSMContext ):
         reply_markup=get_name_of_exercise_by_index(exercises_list)
     )
 
-
-    
-@router.callback_query(F.data.startswith("ex_"))
-async def ex_callback(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    ex_name = callback.data.replace("ex_", "")
-
-    
-    await state.update_data(old_name=ex_name)# Запоминаем в память старое название
-
-    await callback.message.answer(f"Ви обрали вправу '{ex_name}'. Що бажаєте зробити?", reply_markup=get_variants_of_exercise_keyboard())   
+   
 
 @router.callback_query(F.data.startswith("ex_idx_"))
 async def ex_index_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     
-    index = int(callback.data.replace("ex_idx_", ""))
+    index = int(callback.data.split("_")[-1])
     user_data = await state.get_data()
     exercises_list = user_data.get("current_exercises", [])
     
@@ -909,7 +867,7 @@ async def train_categ_callback(callback: types.CallbackQuery, state: FSMContext)
 async def train_index_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     
-    index = int(callback.data.replace("train_idx_", ""))
+    index = int(callback.data.split("_")[-1])
     user_data = await state.get_data()
     exercises_list = user_data.get("current_exercises", [])
     
@@ -1076,7 +1034,7 @@ async def process_exercise_edit_selection(callback: types.CallbackQuery, state: 
     await callback.answer()
     
     # Дістаємо індекс та назву
-    index = int(callback.data.replace("edit_tr_idx_", ""))
+    index = int(callback.data.split("_")[-1])
     user_data = await state.get_data()
     flat_exercises = user_data.get("current_exercises", [])
     
@@ -1164,19 +1122,7 @@ async def del_ex_in_tr_start(callback: types.CallbackQuery, state: FSMContext):
         reply_markup=show_date_of_training_for_user("del_ex_tr_date_", callback.from_user.id, database)
     )
 
-# Крок 2: Створюємо спеціальну клавіатуру, яка виведе вправи саме для видалення
-def get_del_training_exercises_keyboard(date_name, user_id, database):
-    builder = InlineKeyboardBuilder()
-    user_data = database.get(str(user_id), {})
-    training_data = user_data.get('training', {}).get(date_name, {})
-    
-    for category, exercises in training_data.items():
-        for ex_name in exercises.keys():
-            # Кнопки з унікальним префіксом 'finish_del_ex_'
-            builder.add(InlineKeyboardButton(text=f"❌ {ex_name} ({category})", callback_data=f"finish_del_ex_{ex_name}"))
-            
-    builder.adjust(1) 
-    return builder.as_markup()
+
 
 # Крок 3: Ловимо обрану дату і виводимо список вправ
 @router.callback_query(F.data.startswith("del_ex_tr_date_"))
@@ -1209,7 +1155,7 @@ async def finish_del_ex_in_tr(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     
     # Дістаємо індекс та назву
-    index = int(callback.data.replace("del_tr_idx_", ""))
+    index = int(callback.data.split("_")[-1])
     user_data = await state.get_data()
     flat_exercises = user_data.get("current_exercises", [])
     
@@ -1264,7 +1210,7 @@ async def stat_ex_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
     # Дістаємо індекс та назву
-    index = int(callback.data.replace("stat_idx_", ""))
+    index = int(callback.data.split("_")[-1])
     user_data = await state.get_data()
     exercises_list = user_data.get("current_exercises", [])
     
